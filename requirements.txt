@@ -1,0 +1,7 @@
+qrcode
+Pillow
+numpy
+opencv-python
+pyzbar
+PyQt5
+mss
