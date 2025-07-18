@@ -134,7 +134,7 @@ class ReceiverWindow(QtWidgets.QWidget):
         self.total_frames = None
         self.output_filename = None
         self.start_time = time.time()
-        self.timer.start(50)
+        self.timer.start(100)
 
     def stop_capture(self):
         self.timer.stop()

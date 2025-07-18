@@ -20,7 +20,7 @@ from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtCore import QMetaObject, Q_ARG
 
 CHUNK_SIZE = 2048  # 每个数据块大小，单位字节
-FPS = 10  # 视频帧率
+FPS = 5  # 视频帧率
 IMAGE_SIZE = 400
 
 
@@ -50,6 +50,7 @@ def generate_qr(filename, index, chunk_size, data):
 class SenderWindow(QtWidgets.QWidget):
     fileToLoad = QtCore.pyqtSignal(str)
     preprocessingFinished = QtCore.pyqtSignal(bool)
+
     def __init__(self):
         super().__init__()
         self.last_time = time.time()
