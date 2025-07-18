@@ -1,5 +1,6 @@
 # 接收端程序，实现录屏、二维码实时解码、丢帧检测及缺失帧列表显示
 
+from math import floor
 import sys
 import cv2
 import numpy as np
@@ -25,7 +26,6 @@ class ProgressCanvas(QtWidgets.QWidget):
         super().__init__(parent)
         self.received = set()
         self.total = 0
-        self.cols = 50  # 每行格子数，可按需调整
 
     def setData(self, received: set, total: int):
         self.received = received
@@ -34,19 +34,31 @@ class ProgressCanvas(QtWidgets.QWidget):
 
     def paintEvent(self, event):
         if self.total <= 0:
+            # self.setVisible(False)
             return
+        # self.setVisible(True)
+
         painter = QtGui.QPainter(self)
+
         w, h = self.width(), self.height()
-        cols = self.cols
-        rows = (self.total + cols - 1) // cols
-        cell_w = w / cols
-        cell_h = h / rows
+        factor = (w * h) / self.total
+        max_bucket = np.zeros((h, w))
         for i in range(self.total):
-            r = i // cols
-            c = i % cols
-            rect = QtCore.QRectF(c * cell_w, r * cell_h, cell_w, cell_h)
-            color = QtGui.QColor(0, 180, 0) if i in self.received else QtGui.QColor(180, 0, 0)
-            painter.fillRect(rect, color)
+            for j in range(floor(i * factor), floor((i + 1) * factor)):
+                max_bucket[j // w, j % w] += 1
+
+        real_bucket = np.zeros((h, w))
+        for i in range(self.total):
+            if i in self.received:
+                for j in range(floor(i * factor), floor((i + 1) * factor)):
+                    real_bucket[j // w, j % w] += 1
+
+        for i in range(h):
+            for j in range(w):
+                ratio = real_bucket[i, j] / max_bucket[i, j]
+                rect = QtCore.QRectF(j, i, 1, 1)
+                color = QtGui.QColor(*(int((l_ - r_) * ratio + r_) for l_, r_ in zip((56, 142, 60), (97, 97, 97))))
+                painter.fillRect(rect, color)
         painter.end()
 
 
@@ -96,8 +108,6 @@ class ReceiverWindow(QtWidgets.QWidget):
         self.count_label = QtWidgets.QLabel("已传输0/0个")
         self.count_label.setAlignment(QtCore.Qt.AlignCenter)
         layout.addWidget(self.count_label)
-
-        # 进度画板（高度缩小）
 
         layout.addStretch(1)
         self.canvas = ProgressCanvas(self)
