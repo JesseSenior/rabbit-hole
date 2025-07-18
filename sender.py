@@ -44,6 +44,7 @@ class SenderWindow(QtWidgets.QWidget):
         self.current_frame_index = 0
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.next_frame)
+        self.child_windows = []
 
         self.init_ui()
 
@@ -59,6 +60,11 @@ class SenderWindow(QtWidgets.QWidget):
         self.clip_btn.clicked.connect(self.load_clipboard)
         sub_layout.addWidget(self.clip_btn)
         layout.addLayout(sub_layout)
+
+        self.sub_btn = QtWidgets.QPushButton("创建子窗口")
+        self.sub_btn.setEnabled(False)
+        self.sub_btn.clicked.connect(self.create_subwindow)
+        layout.addWidget(self.sub_btn)
 
         self.start_btn = QtWidgets.QPushButton("开始发送")
         self.start_btn.clicked.connect(self.start_sending)
@@ -81,16 +87,17 @@ class SenderWindow(QtWidgets.QWidget):
 
         self.video_label = QtWidgets.QLabel()
         self.video_label.setFixedSize(IMAGE_SIZE, IMAGE_SIZE)
-        self.video_label.setHidden(True)
+        # self.video_label.setHidden(True)
         layout.addWidget(self.video_label, alignment=QtCore.Qt.AlignHCenter)
-        self.progress = QtWidgets.QProgressBar()
-        self.progress.setRange(0, 0)
-        self.progress.setHidden(True)
-        layout.addWidget(self.progress)
 
         self.time_label = QtWidgets.QLabel("一轮时间: N/A")
         self.time_label.setHidden(True)
         layout.addWidget(self.time_label)
+
+        self.progress = QtWidgets.QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setHidden(True)
+        layout.addWidget(self.progress)
 
         self.setLayout(layout)
 
@@ -119,6 +126,7 @@ class SenderWindow(QtWidgets.QWidget):
         self.current_frame_index = 0
         self.missing_frames.clear()
         self.start_btn.setEnabled(True)
+        self.sub_btn.setEnabled(True)
 
         self.progress.setRange(0, len(self.chunks) - 1)
         self.progress.setValue(0)
@@ -132,7 +140,7 @@ class SenderWindow(QtWidgets.QWidget):
         self.load_btn.setEnabled(False)
         self.clip_btn.setEnabled(False)
 
-        self.video_label.setHidden(False)
+        # self.video_label.setHidden(False)
         self.progress.setHidden(False)
 
         self.resend_btn.setEnabled(True)
@@ -144,6 +152,9 @@ class SenderWindow(QtWidgets.QWidget):
         data = self.chunks[self.send_ids[self.current_frame_index]]
         qr_img = self.make_qr(data, self.send_ids[self.current_frame_index])
         self.show_frame(qr_img)
+        # 同时更新所有子窗口
+        for cw in self.child_windows:
+            cw.update_frame()
         self.progress.setValue(self.current_frame_index)
         self.current_frame_index = (self.current_frame_index + 1) % len(self.send_ids)
 
@@ -183,7 +194,50 @@ class SenderWindow(QtWidgets.QWidget):
                 f"共 {len(self.send_ids)}/{len(self.chunks)} 帧，一轮时间预计: {sec2time(len(self.send_ids) / FPS)}"
             )
         self.progress.setRange(0, len(self.send_ids) - 1)
+        self.reset_frame_index()
+
+    def reset_frame_index(self):
+        dist_index = np.linspace(0, len(self.send_ids) - 1, len(self.child_windows) + 2).astype(np.int_)
+
+        self.current_frame_index = int(dist_index[0])
+        for i, cw in enumerate(self.child_windows):
+            cw.current_frame_index = int(dist_index[i + 1])
+
+    def create_subwindow(self):
+        cw = ChildWindow(self)
+        self.child_windows.append(cw)
+        cw.show()
+        if hasattr(self, "send_ids"):
+            self.reset_frame_index()
+
+    def closeEvent(self, event):
+        for cw in self.child_windows:
+            cw.close()
+
+
+class ChildWindow(QtWidgets.QWidget):
+    def __init__(self, parent_sender):
+        super().__init__()
+        self.parent_sender = parent_sender
         self.current_frame_index = 0
+        self.setWindowTitle("🐇")
+        self.video_label = QtWidgets.QLabel()
+        self.video_label.setFixedSize(IMAGE_SIZE, IMAGE_SIZE)
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(self.video_label, alignment=QtCore.Qt.AlignHCenter)
+        self.setLayout(layout)
+
+    def update_frame(self):
+        chunks = self.parent_sender.chunks
+        ids = self.parent_sender.send_ids
+        if not chunks or not ids or self.current_frame_index >= len(ids):
+            return
+        idx = ids[self.current_frame_index]
+        data = chunks[idx]
+        qr_img = self.parent_sender.make_qr(data, idx)
+        img = QtGui.QImage(qr_img.data, qr_img.shape[1], qr_img.shape[0], qr_img.strides[0], QtGui.QImage.Format_BGR888)
+        self.video_label.setPixmap(QtGui.QPixmap.fromImage(img))
+        self.current_frame_index = (self.current_frame_index + 1) % len(ids)
 
 
 def main():
