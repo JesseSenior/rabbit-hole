@@ -151,8 +151,7 @@ class SenderWindow(QtWidgets.QWidget):
     def next_frame(self):
         if not self.chunks:
             return
-        data = self.chunks[self.send_ids[self.current_frame_index]]
-        qr_img = self.make_qr(data, self.send_ids[self.current_frame_index])
+        qr_img = self.make_qr(self.send_ids[self.current_frame_index])
         self.show_frame(qr_img)
         # 同时更新所有子窗口
         self.child_windows = [cw for cw in self.child_windows if cw.isVisible()]
@@ -167,8 +166,9 @@ class SenderWindow(QtWidgets.QWidget):
         self.time_label.setText(f"{orig} | 实时FPS: {fps:.1f}")
         self.current_frame_index = (self.current_frame_index + 1) % len(self.send_ids)
 
-    def make_qr(self, data, index):
+    def make_qr(self, index):
         # 先拼接原始二进制数据，再做 Base64 编码
+        data = self.chunks[index]
         raw = f"{self.filename}|{index:06d}|{len(self.chunks):06d}|".encode() + data
         b64_payload = base64.b64encode(raw)
         qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L)
@@ -242,8 +242,7 @@ class ChildWindow(QtWidgets.QWidget):
         if not chunks or not ids or self.current_frame_index >= len(ids):
             return
         idx = ids[self.current_frame_index]
-        data = chunks[idx]
-        qr_img = self.parent_sender.make_qr(data, idx)
+        qr_img = self.parent_sender.make_qr(idx)
         img = QtGui.QImage(qr_img.data, qr_img.shape[1], qr_img.shape[0], qr_img.strides[0], QtGui.QImage.Format_BGR888)
         self.video_label.setPixmap(QtGui.QPixmap.fromImage(img))
         self.current_frame_index = (self.current_frame_index + 1) % len(ids)
