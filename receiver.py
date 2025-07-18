@@ -13,10 +13,12 @@ except Exception as e:
     pass
 import contextlib
 import base64
+import time
 from PyQt5 import QtWidgets, QtCore, QtGui
 
 import mss
 import mss.windows
+from collections import deque
 
 mss.windows.CAPTUREBLT = 0  # Fix mouse flickering
 
@@ -67,10 +69,12 @@ class ReceiverWindow(QtWidgets.QWidget):
         super().__init__()
         self.setWindowTitle("Rabbit Hole 接收端")
         self.resize(400, 300)
+        self.start_time = None
 
         self.captured_frames = {}
         self.total_frames = None
         self.missing_frames = set()
+        self.history = deque(maxlen=20)
         self.output_filename = None
 
         self.capture = None
@@ -109,6 +113,10 @@ class ReceiverWindow(QtWidgets.QWidget):
         self.count_label.setAlignment(QtCore.Qt.AlignCenter)
         layout.addWidget(self.count_label)
 
+        self.speed_label = QtWidgets.QLabel("速度: 0.00 帧/s, 剩余: --:--")
+        self.speed_label.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(self.speed_label)
+
         layout.addStretch(1)
         self.canvas = ProgressCanvas(self)
         self.canvas.setFixedHeight(200)
@@ -122,8 +130,10 @@ class ReceiverWindow(QtWidgets.QWidget):
         self.stop_btn.setEnabled(True)
         self.captured_frames.clear()
         self.missing_frames.clear()
+        self.history.clear()
         self.total_frames = None
         self.output_filename = None
+        self.start_time = time.time()
         self.timer.start(50)
 
     def stop_capture(self):
@@ -186,6 +196,7 @@ class ReceiverWindow(QtWidgets.QWidget):
                 assert index >= 0 and index < self.total_frames
                 if index not in self.captured_frames:
                     self.captured_frames[index] = chunk_data
+                    self.history.append((time.time(), len(chunk_data)))
             except Exception:
                 continue
 
@@ -200,6 +211,23 @@ class ReceiverWindow(QtWidgets.QWidget):
         self.count_label.setText(f"已传输{len(received)}/{self.total_frames}个")
         self.canvas.setData(received, self.total_frames)
 
+        # 计算最近20帧的数据率
+        if len(self.history) >= 2:
+            times, sizes = zip(*self.history)
+            duration = times[-1] - times[0]
+            total_bytes = sum(sizes)
+            speed = total_bytes / duration if duration > 0 else 0
+        else:
+            speed = 0
+        # 计算剩余时间
+        now = time.time()
+        elapsed = now - self.start_time if self.start_time else 0
+        received_count = len(received)
+        rem = (self.total_frames - received_count) / (received_count / elapsed) if (elapsed > 0 and received_count > 0) else 0
+        m, s = divmod(int(rem), 60)
+        human = self.format_speed(speed)
+        self.speed_label.setText(f"速度: {human}, 剩余: {m:02d}:{s:02d}")
+
         # 获取完成时自动停止
         if len(self.captured_frames.keys()) == self.total_frames:
             self.stop_capture()
@@ -209,6 +237,15 @@ class ReceiverWindow(QtWidgets.QWidget):
         text = ", ".join(str(i) for i in sorted(self.missing_frames))
         QtWidgets.QApplication.clipboard().setText(text)
         QtWidgets.QMessageBox.information(self, "提示", "已复制缺失帧到剪贴板")
+
+    def format_speed(self, bytes_per_sec):
+        speed = bytes_per_sec
+        units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
+        idx = 0
+        while speed >= 1024 and idx < len(units) - 1:
+            speed /= 1024
+            idx += 1
+        return f"{speed:.2f} {units[idx]}/s"
 
 
 def main():
