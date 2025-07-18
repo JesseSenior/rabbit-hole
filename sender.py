@@ -14,7 +14,10 @@ except Exception as e:
 import time
 import numpy as np
 import qrcode
+import threading
+import concurrent.futures
 from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt5.QtCore import QMetaObject, Q_ARG
 
 CHUNK_SIZE = 2048  # 每个数据块大小，单位字节
 FPS = 10  # 视频帧率
@@ -33,7 +36,20 @@ def sec2time(s):
     return "".join(r)
 
 
+def generate_qr(filename, index, chunk_size, data):
+    # 先拼接原始二进制数据，再做 Base64 编码
+    raw = f"{filename}|{index}|{chunk_size}|".encode() + data
+    b64_payload = base64.b64encode(raw)
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L)
+    qr.add_data(b64_payload)
+    qr.make(fit=True)
+    img = qr.make_image().resize((IMAGE_SIZE, IMAGE_SIZE)).convert("RGB")
+    return np.array(img)
+
+
 class SenderWindow(QtWidgets.QWidget):
+    fileToLoad = QtCore.pyqtSignal(str)
+    preprocessingFinished = QtCore.pyqtSignal(bool)
     def __init__(self):
         super().__init__()
         self.last_time = time.time()
@@ -49,6 +65,8 @@ class SenderWindow(QtWidgets.QWidget):
         self.child_windows = []
 
         self.init_ui()
+        self.fileToLoad.connect(lambda path: self.load_file(path=path))
+        self.preprocessingFinished.connect(self.on_preprocessing_finished)
 
     def init_ui(self):
         layout = QtWidgets.QVBoxLayout()
@@ -104,13 +122,15 @@ class SenderWindow(QtWidgets.QWidget):
         self.setLayout(layout)
 
     def load_file(self, *, path=None):
+        force_start = path is not None
         if path is None:
             path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "选择文件")
+
         if path != "":
             with open(path, "rb") as f:
                 self.file_data = f.read()
             self.filename = os.path.basename(path)
-            self.pre_start_sending()
+            self.pre_start_sending(force_start=force_start)
 
     def load_clipboard(self):
         text = QtWidgets.QApplication.clipboard().text()
@@ -122,19 +142,52 @@ class SenderWindow(QtWidgets.QWidget):
         self.filename = "clipboard.txt"
         self.pre_start_sending()
 
-    def pre_start_sending(self):
+    def pre_start_sending(self, *, force_start=False):
         self.chunks = [self.file_data[i : i + CHUNK_SIZE] for i in range(0, len(self.file_data), CHUNK_SIZE)]
         self.send_ids = list(range(len(self.chunks)))
         self.current_frame_index = 0
         self.missing_frames.clear()
-        self.start_btn.setEnabled(True)
-        self.sub_btn.setEnabled(True)
+        self.qr_images = [None] * len(self.chunks)
+        # 进度对话框
+        self.progress_dialog = QtWidgets.QProgressDialog("正在预处理帧...", "取消", 0, len(self.chunks), self)
+        self.progress_dialog.setWindowModality(QtCore.Qt.WindowModal)
+        # 禁用按钮，等待预处理完成
+        self.start_btn.setEnabled(False)
+        self.sub_btn.setEnabled(False)
 
         self.progress.setRange(0, len(self.chunks) - 1)
         self.progress.setValue(0)
 
         self.time_label.setHidden(False)
         self.time_label.setText(f"共 {len(self.chunks)} 帧，一轮时间预计: {sec2time(len(self.chunks) / FPS)}")
+
+        def worker():
+            # 多线程生成二维码
+            with concurrent.futures.ProcessPoolExecutor(max_workers=4) as executor:
+                futures = {
+                    executor.submit(
+                        generate_qr,
+                        self.filename,
+                        i,
+                        len(self.chunks),
+                        self.chunks[i],
+                    ): i
+                    for i in range(len(self.chunks))
+                }
+                cnt = 0
+                for future in concurrent.futures.as_completed(futures):
+                    i = futures[future]
+                    qr = future.result()
+                    self.qr_images[i] = qr
+                    cnt += 1
+                    if self.progress_dialog.wasCanceled():
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        break
+                    QMetaObject.invokeMethod(self.progress_dialog, "setValue", Q_ARG(int, cnt + 1))
+            QMetaObject.invokeMethod(self.progress_dialog, "close")
+            self.preprocessingFinished.emit(force_start)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def start_sending(self):
         self.timer.start(1000 // FPS)
@@ -151,7 +204,11 @@ class SenderWindow(QtWidgets.QWidget):
     def next_frame(self):
         if not self.chunks:
             return
-        qr_img = self.make_qr(self.send_ids[self.current_frame_index])
+        idx = self.send_ids[self.current_frame_index]
+        if hasattr(self, "qr_images") and self.qr_images[idx] is not None:
+            qr_img = self.qr_images[idx]
+        else:
+            qr_img = self.make_qr(idx)
         self.show_frame(qr_img)
         # 同时更新所有子窗口
         self.child_windows = [cw for cw in self.child_windows if cw.isVisible()]
@@ -167,19 +224,7 @@ class SenderWindow(QtWidgets.QWidget):
         self.current_frame_index = (self.current_frame_index + 1) % len(self.send_ids)
 
     def make_qr(self, index):
-        # 先拼接原始二进制数据，再做 Base64 编码
-        data = self.chunks[index]
-        raw = f"{self.filename}|{index:06d}|{len(self.chunks):06d}|".encode() + data
-        b64_payload = base64.b64encode(raw)
-        qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L)
-        qr.add_data(b64_payload)
-        qr.make(fit=True)
-        img = qr.make_image().convert("RGB")
-        img = img.resize((IMAGE_SIZE, IMAGE_SIZE))
-        # 转为OpenCV格式
-        img_cv = np.array(img)
-        img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
-        return img_cv
+        return generate_qr(self.filename, index, len(self.chunks), self.chunks[index])
 
     def show_frame(self, frame):
         # 显示在界面上
@@ -219,6 +264,12 @@ class SenderWindow(QtWidgets.QWidget):
         if hasattr(self, "send_ids"):
             self.reset_frame_index()
 
+    def on_preprocessing_finished(self, force_start):
+        self.start_btn.setEnabled(True)
+        self.sub_btn.setEnabled(True)
+        if force_start:
+            self.start_sending()
+
     def closeEvent(self, event):
         for cw in self.child_windows:
             cw.close()
@@ -242,7 +293,12 @@ class ChildWindow(QtWidgets.QWidget):
         if not chunks or not ids or self.current_frame_index >= len(ids):
             return
         idx = ids[self.current_frame_index]
-        qr_img = self.parent_sender.make_qr(idx)
+
+        if hasattr(self.parent_sender, "qr_images") and self.parent_sender.qr_images[idx] is not None:
+            qr_img = self.parent_sender.qr_images[idx]
+        else:
+            qr_img = self.parent_sender.make_qr(idx)
+
         img = QtGui.QImage(qr_img.data, qr_img.shape[1], qr_img.shape[0], qr_img.strides[0], QtGui.QImage.Format_BGR888)
         self.video_label.setPixmap(QtGui.QPixmap.fromImage(img))
         self.current_frame_index = (self.current_frame_index + 1) % len(ids)
@@ -257,9 +313,7 @@ def main():
     win.show()
     if args.file:
         if os.path.isfile(args.file):
-            win.load_file(path=args.file)
-            win.pre_start_sending()
-            win.start_sending()
+            QtCore.QTimer.singleShot(0, lambda path=args.file: win.fileToLoad.emit(path))
         else:
             print(f"文件不存在: {args.file}", file=sys.stderr)
             sys.exit(1)
