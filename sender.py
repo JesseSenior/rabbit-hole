@@ -150,6 +150,7 @@ class SenderWindow(QtWidgets.QWidget):
         self.qr_images = [None] * len(self.chunks)
         # 进度对话框
         self.progress_dialog = QtWidgets.QProgressDialog("正在预处理帧...", "取消", 0, len(self.chunks), self)
+        self.progress_dialog.canceled.connect(self._cancel_executor)
         self.progress_dialog.setWindowModality(QtCore.Qt.WindowModal)
         # 禁用按钮，等待预处理完成
         self.start_btn.setEnabled(False)
@@ -164,6 +165,7 @@ class SenderWindow(QtWidgets.QWidget):
         def worker():
             # 多线程生成二维码
             with concurrent.futures.ProcessPoolExecutor(max_workers=4) as executor:
+                self.executor = executor
                 futures = {
                     executor.submit(
                         generate_qr,
@@ -269,6 +271,11 @@ class SenderWindow(QtWidgets.QWidget):
         self.sub_btn.setEnabled(True)
         if force_start:
             self.start_sending()
+
+    def _cancel_executor(self):
+        if hasattr(self, "executor") and self.executor:
+            self.executor.shutdown(wait=False, cancel_futures=True)
+            self.executor = None
 
     def closeEvent(self, event):
         for cw in self.child_windows:
