@@ -11,6 +11,7 @@ try:
 except Exception as e:
     pass
 
+import time
 import numpy as np
 import qrcode
 from PyQt5 import QtWidgets, QtCore, QtGui
@@ -35,6 +36,7 @@ def sec2time(s):
 class SenderWindow(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
+        self.last_time = time.time()
         self.setWindowTitle("Rabbit Hole 发送端")
         # self.resize(400, 300)
 
@@ -153,9 +155,16 @@ class SenderWindow(QtWidgets.QWidget):
         qr_img = self.make_qr(data, self.send_ids[self.current_frame_index])
         self.show_frame(qr_img)
         # 同时更新所有子窗口
+        self.child_windows = [cw for cw in self.child_windows if cw.isVisible()]
         for cw in self.child_windows:
             cw.update_frame()
         self.progress.setValue(self.current_frame_index)
+        now = time.time()
+        fps = 1 / (now - self.last_time) if self.last_time else 0
+        self.last_time = now
+        # 更新实时FPS显示
+        orig = self.time_label.text().split(" | ")[0]
+        self.time_label.setText(f"{orig} | 实时FPS: {fps:.1f}")
         self.current_frame_index = (self.current_frame_index + 1) % len(self.send_ids)
 
     def make_qr(self, data, index):
