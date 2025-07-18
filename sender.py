@@ -177,6 +177,8 @@ class SenderWindow(QtWidgets.QWidget):
                     for i in range(len(self.chunks))
                 }
                 cnt = 0
+                start_time = time.time()
+                total = len(self.chunks)
                 for future in concurrent.futures.as_completed(futures):
                     i = futures[future]
                     qr = future.result()
@@ -185,7 +187,14 @@ class SenderWindow(QtWidgets.QWidget):
                     if self.progress_dialog.wasCanceled():
                         executor.shutdown(wait=False, cancel_futures=True)
                         break
-                    QMetaObject.invokeMethod(self.progress_dialog, "setValue", Q_ARG(int, cnt + 1))
+                    elapsed = time.time() - start_time
+                    speed = cnt / elapsed if elapsed > 0 else 0
+                    remaining = int((total - cnt) / speed) if speed > 0 else 0
+                    remaining_text = sec2time(remaining)
+                    label_text = f"预处理: {cnt}/{total} 帧，剩余: {remaining_text}"
+                    QMetaObject.invokeMethod(self.progress_dialog, "setValue", Q_ARG(int, cnt))
+                    QMetaObject.invokeMethod(self.progress_dialog, "setLabelText", Q_ARG(str, label_text))
+            self.executor = None
             QMetaObject.invokeMethod(self.progress_dialog, "close")
             self.preprocessingFinished.emit(force_start)
 
