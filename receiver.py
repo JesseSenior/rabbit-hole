@@ -150,7 +150,8 @@ class ReceiverWindow(QtWidgets.QWidget):
                     text = data_bytes.decode()
                 except Exception:
                     text = ""
-                QtWidgets.QApplication.clipboard().setText(text)
+                cb = QtWidgets.QApplication.clipboard()
+                cb.setText(text, mode=cb.Clipboard)
                 QtWidgets.QMessageBox.information(self, "提示", "剪切板内容已更新")
             else:
                 with open(self.output_filename, "wb") as f:
@@ -223,7 +224,11 @@ class ReceiverWindow(QtWidgets.QWidget):
         now = time.time()
         elapsed = now - self.start_time if self.start_time else 0
         received_count = len(received)
-        rem = (self.total_frames - received_count) / (received_count / elapsed) if (elapsed > 0 and received_count > 0) else 0
+        rem = (
+            (self.total_frames - received_count) / (received_count / elapsed)
+            if (elapsed > 0 and received_count > 0)
+            else 0
+        )
         m, s = divmod(int(rem), 60)
         human = self.format_speed(speed)
         self.speed_label.setText(f"速度: {human}, 剩余: {m:02d}:{s:02d}")
@@ -240,7 +245,7 @@ class ReceiverWindow(QtWidgets.QWidget):
 
     def format_speed(self, bytes_per_sec):
         speed = bytes_per_sec
-        units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
+        units = ["B", "KiB", "MiB", "GiB", "TiB"]
         idx = 0
         while speed >= 1024 and idx < len(units) - 1:
             speed /= 1024
