@@ -15,15 +15,28 @@ import numpy as np
 import qrcode
 from PyQt5 import QtWidgets, QtCore, QtGui
 
-CHUNK_SIZE = 1600  # 每个数据块大小，单位字节
+CHUNK_SIZE = 2048  # 每个数据块大小，单位字节
 FPS = 10  # 视频帧率
+IMAGE_SIZE = 400
+
+
+def sec2time(s):
+    if s == 0:
+        return "0秒"
+    units = [(31536000, "年"), (86400, "天"), (3600, "小时"), (60, "分"), (1, "秒")]
+    r = []
+    for t, u in units:
+        if s >= t:
+            r.append(f"{int(s // t)}{u}")
+            s %= t
+    return "".join(r)
 
 
 class SenderWindow(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Rabbit Hole 发送端")
-        self.resize(400, 300)
+        # self.resize(400, 300)
 
         self.file_data = b""
         self.chunks = []
@@ -37,66 +50,93 @@ class SenderWindow(QtWidgets.QWidget):
     def init_ui(self):
         layout = QtWidgets.QVBoxLayout()
 
+        sub_layout = QtWidgets.QHBoxLayout()
         self.load_btn = QtWidgets.QPushButton("加载文件")
         self.load_btn.clicked.connect(self.load_file)
-        layout.addWidget(self.load_btn)
+        sub_layout.addWidget(self.load_btn)
 
-        # 新增：读取剪贴板按钮
         self.clip_btn = QtWidgets.QPushButton("读取剪贴板")
         self.clip_btn.clicked.connect(self.load_clipboard)
-        layout.addWidget(self.clip_btn)
+        sub_layout.addWidget(self.clip_btn)
+        layout.addLayout(sub_layout)
 
         self.start_btn = QtWidgets.QPushButton("开始发送")
         self.start_btn.clicked.connect(self.start_sending)
         self.start_btn.setEnabled(False)
         layout.addWidget(self.start_btn)
 
+        sub_layout = QtWidgets.QHBoxLayout()
+
         self.missing_input = QtWidgets.QLineEdit()
         self.missing_input.setPlaceholderText("输入缺失帧编号，用逗号分隔")
-        layout.addWidget(self.missing_input)
+        self.missing_input.setEnabled(False)
+        self.missing_input.returnPressed.connect(self.resend_missing)
+        sub_layout.addWidget(self.missing_input)
 
         self.resend_btn = QtWidgets.QPushButton("重发缺失")
         self.resend_btn.clicked.connect(self.resend_missing)
         self.resend_btn.setEnabled(False)
-        layout.addWidget(self.resend_btn)
+        sub_layout.addWidget(self.resend_btn)
+        layout.addLayout(sub_layout)
 
         self.video_label = QtWidgets.QLabel()
-        self.video_label.setFixedSize(360, 360)
+        self.video_label.setFixedSize(IMAGE_SIZE, IMAGE_SIZE)
+        self.video_label.setHidden(True)
         layout.addWidget(self.video_label, alignment=QtCore.Qt.AlignHCenter)
         self.progress = QtWidgets.QProgressBar()
         self.progress.setRange(0, 0)
-        self.progress.setEnabled(False)
+        self.progress.setHidden(True)
         layout.addWidget(self.progress)
-        # 显示一轮发送用时
+
         self.time_label = QtWidgets.QLabel("一轮时间: N/A")
+        self.time_label.setHidden(True)
         layout.addWidget(self.time_label)
 
         self.setLayout(layout)
 
-    def load_file(self, path=None):
+    def load_file(self, *, path=None):
         if path is None:
             path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "选择文件")
         if path != "":
             with open(path, "rb") as f:
                 self.file_data = f.read()
             self.filename = os.path.basename(path)
-            self.chunks = [self.file_data[i : i + CHUNK_SIZE] for i in range(0, len(self.file_data), CHUNK_SIZE)]
-            self.send_ids = list(range(len(self.chunks)))
-            self.current_frame_index = 0
-            self.missing_frames.clear()
-            self.start_btn.setEnabled(True)
-            self.resend_btn.setEnabled(True)
-            self.progress.setRange(0, len(self.chunks) - 1)
-            self.progress.setValue(0)
-            # QtWidgets.QMessageBox.information(self, "提示", f"文件加载成功，共 {len(self.chunks)} 帧")
-            self.time_label.setText(f"共 {len(self.chunks)} 帧，一轮时间预计: {len(self.chunks) / FPS:.2f}秒")
+            self.pre_start_sending()
+
+    def load_clipboard(self):
+        text = QtWidgets.QApplication.clipboard().text()
+        if not text:
+            QtWidgets.QMessageBox.warning(self, "错误", "剪切板为空")
+            return
+        data = text.encode()
+        self.file_data = data
+        self.filename = "clipboard.txt"
+        self.pre_start_sending()
+
+    def pre_start_sending(self):
+        self.chunks = [self.file_data[i : i + CHUNK_SIZE] for i in range(0, len(self.file_data), CHUNK_SIZE)]
+        self.send_ids = list(range(len(self.chunks)))
+        self.current_frame_index = 0
+        self.missing_frames.clear()
+        self.start_btn.setEnabled(True)
+
+        self.progress.setRange(0, len(self.chunks) - 1)
+        self.progress.setValue(0)
+
+        self.time_label.setHidden(False)
+        self.time_label.setText(f"共 {len(self.chunks)} 帧，一轮时间预计: {sec2time(len(self.chunks) / FPS)}")
 
     def start_sending(self):
         self.timer.start(1000 // FPS)
         self.start_btn.setEnabled(False)
         self.load_btn.setEnabled(False)
         self.clip_btn.setEnabled(False)
-        self.progress.setEnabled(True)
+
+        self.video_label.setHidden(False)
+        self.progress.setHidden(False)
+
+        self.resend_btn.setEnabled(True)
+        self.missing_input.setEnabled(True)
 
     def next_frame(self):
         if not self.chunks:
@@ -114,8 +154,8 @@ class SenderWindow(QtWidgets.QWidget):
         qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L)
         qr.add_data(b64_payload)
         qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-        img = img.resize((360, 360))
+        img = qr.make_image().convert("RGB")
+        img = img.resize((IMAGE_SIZE, IMAGE_SIZE))
         # 转为OpenCV格式
         img_cv = np.array(img)
         img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
@@ -130,7 +170,7 @@ class SenderWindow(QtWidgets.QWidget):
         text = self.missing_input.text()
         if text == "":
             self.send_ids = list(range(len(self.chunks)))
-            self.time_label.setText(f"共 {len(self.chunks)} 帧，一轮时间预计: {len(self.chunks) / FPS:.2f}秒")
+            self.time_label.setText(f"共 {len(self.chunks)} 帧，一轮时间预计: {sec2time(len(self.chunks) / FPS)}")
         else:
             if not text.strip():
                 return
@@ -140,30 +180,11 @@ class SenderWindow(QtWidgets.QWidget):
                 QtWidgets.QMessageBox.warning(self, "错误", "请输入正确的缺失帧编号，逗号分隔")
                 return
             self.time_label.setText(
-                f"共 {len(self.send_ids)}/{len(self.chunks)} 帧，一轮时间预计: {len(self.send_ids) / FPS:.2f}秒"
+                f"共 {len(self.send_ids)}/{len(self.chunks)} 帧，一轮时间预计: {sec2time(len(self.send_ids) / FPS)}"
             )
         self.progress.setRange(0, len(self.send_ids) - 1)
         self.current_frame_index = 0
 
-
-    def load_clipboard(self):
-        # 从剪贴板读取文本并当作二进制数据发送
-        text = QtWidgets.QApplication.clipboard().text()
-        if not text:
-            QtWidgets.QMessageBox.warning(self, "错误", "剪切板为空")
-            return
-        data = text.encode()
-        self.file_data = data
-        self.filename = "clipboard.txt"
-        self.chunks = [self.file_data[i : i + CHUNK_SIZE] for i in range(0, len(self.file_data), CHUNK_SIZE)]
-        self.send_ids = list(range(len(self.chunks)))
-        self.current_frame_index = 0
-        self.missing_frames.clear()
-        self.start_btn.setEnabled(True)
-        self.resend_btn.setEnabled(True)
-        self.progress.setRange(0, len(self.chunks) - 1)
-        self.progress.setValue(0)
-        self.time_label.setText(f"共 {len(self.chunks)} 帧，一轮时间预计: {len(self.chunks) / FPS:.2f}秒")
 
 def main():
     parser = argparse.ArgumentParser(description="Rabbit Hole 发送端")
@@ -174,7 +195,8 @@ def main():
     win.show()
     if args.file:
         if os.path.isfile(args.file):
-            win.load_file(args.file)
+            win.load_file(path=args.file)
+            win.pre_start_sending()
             win.start_sending()
         else:
             print(f"文件不存在: {args.file}", file=sys.stderr)
